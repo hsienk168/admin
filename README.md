@@ -1,198 +1,189 @@
-# Superpowers
+# Binance 全市場監控系統
 
-Superpowers is a complete software development methodology for your coding agents, built on top of a set of composable skills and some initial instructions that make sure your agent uses them.
+即時監控 Binance 現貨市場所有交易對，偵測高波動事件與負資金費率，透過 Telegram 發送即時通知，並支援 30 分鐘追蹤回報。
 
-## How it works
+---
 
-It starts from the moment you fire up your coding agent. As soon as it sees that you're building something, it *doesn't* just jump into trying to write code. Instead, it steps back and asks you what you're really trying to do. 
+## 功能特色
 
-Once it's teased a spec out of the conversation, it shows it to you in chunks short enough to actually read and digest. 
+- **全市場掃描**：支援 Binance 現貨市場所有交易對（300+）
+- **雙重偵測**：波動率異常偵測 + 負資金費率偵測
+- **即時通知**：Telegram Bot 即時推送 alert
+- **30 分鐘追蹤**：被標記的交易對每 30 分鐘自動回報最新狀態
+- **狀態持久化**：所有資料寫入 `state.json`，支援程式重啟後恢復
+- **線上儀表板**：Vue 3 前端即時顯示監控狀態
+- **設定調整**：可透過 UI 或 API 即時調整監控參數
 
-After you've signed off on the design, your agent puts together an implementation plan that's clear enough for an enthusiastic junior engineer with poor taste, no judgement, no project context, and an aversion to testing to follow. It emphasizes true red/green TDD, YAGNI (You Aren't Gonna Need It), and DRY. 
+---
 
-Next up, once you say "go", it launches a *subagent-driven-development* process, having agents work through each engineering task, inspecting and reviewing their work, and continuing forward. It's not uncommon for Claude to be able to work autonomously for a couple hours at a time without deviating from the plan you put together.
+## 架構
 
-There's a bunch more to it, but that's the core of the system. And because the skills trigger automatically, you don't need to do anything special. Your coding agent just has Superpowers.
+```
+┌─────────────────────────────────────────────┐
+│            Binance WebSocket                │
+│   wss://stream.binance.com:9443/ws/!ticker  │
+└──────────────────┬──────────────────────────┘
+                   │ 1sec tickers
+                   ▼
+┌─────────────────────────────────────────────┐
+│           Python Monitor Agent              │
+│  ┌─────────┐  ┌──────────┐  ┌───────────┐  │
+│  │Analyzer │→│ Trigger   │→│ Notifier   │  │
+│  │(Vol+FR) │  │ Engine    │  │(Telegram) │  │
+│  └─────────┘  └──────────┘  └───────────┘  │
+│       ↑                                    │
+│  ┌─────────┐                               │
+│  │ State   │← state.json (共享)            │
+│  │ Manager │                               │
+│  └─────────┘                               │
+└──────────────────┬──────────────────────────┘
+                   │ REST API (FastAPI)
+                   ▼
+┌─────────────────────────────────────────────┐
+│           Vue 3 Frontend (port 5173)         │
+│      Dashboard / Settings / History         │
+└─────────────────────────────────────────────┘
+```
 
+**三元件共享 `state.json`**：Monitor Agent 寫入，FastAPI 讀取，Vue 前端透過 API 展示。
 
-## Sponsorship
+---
 
-If Superpowers has helped you do stuff that makes money and you are so inclined, I'd greatly appreciate it if you'd consider [sponsoring my opensource work](https://github.com/sponsors/obra).
+## 安裝步驟
 
-Thanks! 
+### 前置需求
 
-- Jesse
+- Python 3.10+
+- Node.js 18+ (for frontend)
+- Telegram Bot Token (透過 [@BotFather](https://t.me/BotFather) 取得)
+- Telegram Chat ID (透過 [@userinfobot](https://t.me/userinfobot) 取得)
 
-
-## Installation
-
-**Note:** Installation differs by platform. 
-
-### Claude Code Official Marketplace
-
-Superpowers is available via the [official Claude plugin marketplace](https://claude.com/plugins/superpowers)
-
-Install the plugin from Anthropic's official marketplace:
+### 1. 複製專案
 
 ```bash
-/plugin install superpowers@claude-plugins-official
+cd ~/.config/superpowers/worktrees/binance-monitor/binance-monitor
 ```
 
-### Claude Code (Superpowers Marketplace)
-
-The Superpowers marketplace provides Superpowers and some other related plugins for Claude Code.
-
-In Claude Code, register the marketplace first:
+### 2. 安裝 Python 依賴
 
 ```bash
-/plugin marketplace add obra/superpowers-marketplace
+python3 -m pip install --break-system-packages -r requirements.txt
 ```
 
-Then install the plugin from this marketplace:
+### 3. 設定 config.json
 
 ```bash
-/plugin install superpowers@superpowers-marketplace
+# 建立設定檔
+cp state.json config.json  # 第一次需手動建立 config.json
 ```
 
-### OpenAI Codex CLI
+编辑 `config.json`：
 
-- Open plugin search interface
+```json
+{
+  "telegram_bot_token": "YOUR_BOT_TOKEN",
+  "telegram_chat_id": "YOUR_CHAT_ID",
+  "volatility_threshold_pct": 3.0,
+  "volatility_std_multiplier": 2,
+  "funding_rate_threshold": -0.01,
+  "track_interval_minutes": 30
+}
+```
+
+### 4. 安裝前端依賴
 
 ```bash
-/plugins
+cd web
+npm install
+cd ..
 ```
 
-Search for Superpowers
+---
+
+## 使用方式
+
+### 啟動 Monitor Agent
 
 ```bash
-superpowers
+python3 run_monitor.py
 ```
 
-Select `Install Plugin`
-
-### OpenAI Codex App
-
-- In the Codex app, click on Plugins in the sidebar.
-- You should see `Superpowers` in the Coding section. 
-- Click the `+` next to Superpowers and follow the prompts.
-
-
-### Cursor (via Plugin Marketplace)
-
-In Cursor Agent chat, install from marketplace:
-
-```text
-/add-plugin superpowers
-```
-
-or search for "superpowers" in the plugin marketplace.
-
-### OpenCode
-
-Tell OpenCode:
-
-```
-Fetch and follow instructions from https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md
-```
-
-**Detailed docs:** [docs/README.opencode.md](docs/README.opencode.md)
-
-### GitHub Copilot CLI
+### 啟動 FastAPI Server
 
 ```bash
-copilot plugin marketplace add obra/superpowers-marketplace
-copilot plugin install superpowers@superpowers-marketplace
+python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Gemini CLI
+### 啟動 Vue 前端
 
 ```bash
-gemini extensions install https://github.com/obra/superpowers
+cd web
+npm run dev
+# 開啟 http://localhost:5173
 ```
 
-To update:
+---
+
+## API 文件
+
+| Method | Endpoint | 說明 |
+|--------|----------|------|
+| GET | `/api/state` | 取得目前監控狀態 |
+| GET | `/api/settings` | 取得監控設定 |
+| PUT | `/api/settings` | 更新監控設定 |
+| POST | `/api/track/{symbol}/stop` | 停止追蹤特定交易對 |
+| GET | `/api/health` | 健康檢查 |
+
+### 設定參數說明
+
+| 參數 | 預設值 | 說明 |
+|------|--------|------|
+| `volatility_threshold_pct` | 3.0 | 波動率警報閾值（%） |
+| `volatility_std_multiplier` | 2 | 標準差倍數（相對歷史波動） |
+| `funding_rate_threshold` | -0.01 | 資金費率警報閾值（-1%） |
+| `track_interval_minutes` | 30 | 追蹤回報間隔（分鐘） |
+
+---
+
+## 開發指南
+
+### 執行測試
 
 ```bash
-gemini extensions update superpowers
+python3 -m pytest -v
 ```
 
-## The Basic Workflow
+### 模組結構
 
-1. **brainstorming** - Activates before writing code. Refines rough ideas through questions, explores alternatives, presents design in sections for validation. Saves design document.
+```
+monitor/
+├── state.py       # 執行緒安全的 JSON 狀態讀寫
+├── analyzer.py    # VolatilityAnalyzer + FundingRateChecker
+├── trigger.py     # TriggerEngine 狀態機
+├── notifier.py    # TelegramNotifier
+└── websocket.py   # BinanceMonitor WebSocket 消費者
+```
 
-2. **using-git-worktrees** - Activates after design approval. Creates isolated workspace on new branch, runs project setup, verifies clean test baseline.
+### 通知觸發條件
 
-3. **writing-plans** - Activates with approved design. Breaks work into bite-sized tasks (2-5 minutes each). Every task has exact file paths, complete code, verification steps.
+- **波動率觸發**： `(price_change_pct >= volatility_threshold_pct) AND (price_change_pct >= std_multiplier * historical_std)`
+- **資金費率觸發**：`funding_rate <= funding_rate_threshold`（即 <= -1%）
+- 兩種條件任一滿足即開始 30 分鐘追蹤週期
 
-4. **subagent-driven-development** or **executing-plans** - Activates with plan. Dispatches fresh subagent per task with two-stage review (spec compliance, then code quality), or executes in batches with human checkpoints.
+---
 
-5. **test-driven-development** - Activates during implementation. Enforces RED-GREEN-REFACTOR: write failing test, watch it fail, write minimal code, watch it pass, commit. Deletes code written before tests.
+## TODO
 
-6. **requesting-code-review** - Activates between tasks. Reviews against plan, reports issues by severity. Critical issues block progress.
+- [ ] 支援 Binance 期貨市場
+- [ ] 網頁視覺化（已實作 Vue 前端，待強化）
+- [ ] 對接交易策略
+- [ ] 歷史資料匯出（CSV/JSON）
+- [ ] 多交易所支援
+- [ ] Alert 濃縮（同一交易對短時間內不重複通知）
+- [ ] 效能優化（全市場 300+ 交易對報價吞吐）
 
-7. **finishing-a-development-branch** - Activates when tasks complete. Verifies tests, presents options (merge/PR/keep/discard), cleans up worktree.
-
-**The agent checks for relevant skills before any task.** Mandatory workflows, not suggestions.
-
-## What's Inside
-
-### Skills Library
-
-**Testing**
-- **test-driven-development** - RED-GREEN-REFACTOR cycle (includes testing anti-patterns reference)
-
-**Debugging**
-- **systematic-debugging** - 4-phase root cause process (includes root-cause-tracing, defense-in-depth, condition-based-waiting techniques)
-- **verification-before-completion** - Ensure it's actually fixed
-
-**Collaboration** 
-- **brainstorming** - Socratic design refinement
-- **writing-plans** - Detailed implementation plans
-- **executing-plans** - Batch execution with checkpoints
-- **dispatching-parallel-agents** - Concurrent subagent workflows
-- **requesting-code-review** - Pre-review checklist
-- **receiving-code-review** - Responding to feedback
-- **using-git-worktrees** - Parallel development branches
-- **finishing-a-development-branch** - Merge/PR decision workflow
-- **subagent-driven-development** - Fast iteration with two-stage review (spec compliance, then code quality)
-
-**Meta**
-- **writing-skills** - Create new skills following best practices (includes testing methodology)
-- **using-superpowers** - Introduction to the skills system
-
-## Philosophy
-
-- **Test-Driven Development** - Write tests first, always
-- **Systematic over ad-hoc** - Process over guessing
-- **Complexity reduction** - Simplicity as primary goal
-- **Evidence over claims** - Verify before declaring success
-
-Read [the original release announcement](https://blog.fsck.com/2025/10/09/superpowers/).
-
-## Contributing
-
-The general contribution process for Superpowers is below. Keep in mind that we don't generally accept contributions of new skills and that any updates to skills must work across all of the coding agents we support.
-
-1. Fork the repository
-2. Switch to the 'dev' branch
-3. Create a branch for your work
-4. Follow the `writing-skills` skill for creating and testing new and modified skills
-5. Submit a PR, being sure to fill in the pull request template.
-
-See `skills/writing-skills/SKILL.md` for the complete guide.
-
-## Updating
-
-Superpowers updates are somewhat coding-agent dependent, but are often automatic.
+---
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Community
-
-Superpowers is built by [Jesse Vincent](https://blog.fsck.com) and the rest of the folks at [Prime Radiant](https://primeradiant.com).
-
-- **Discord**: [Join us](https://discord.gg/35wsABTejz) for community support, questions, and sharing what you're building with Superpowers
-- **Issues**: https://github.com/obra/superpowers/issues
-- **Release announcements**: [Sign up](https://primeradiant.com/superpowers/) to get notified about new versions
+MIT

@@ -1,8 +1,0 @@
-{
-  "telegram_bot_token": "8653265267:AAH0wdhy-dDKx1H2rNaN2KbUoZKUu-fxPoM",
-  "telegram_chat_id": "376483786",
-  "volatility_threshold_pct": 20.0,
-  "volatility_std_multiplier": 2,
-  "funding_rate_threshold": -0.01,
-  "track_interval_minutes": 30
-}

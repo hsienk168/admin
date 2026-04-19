@@ -56,13 +56,18 @@ class VolatilityAnalyzer:
 
 
 class FundingRateChecker:
-    def __init__(self, threshold: float = -0.01):
-        self.threshold = threshold  # e.g. -0.01 = -1%
+    def __init__(self, threshold: float = -1.0):
+        # threshold is in percentage units, e.g. -1.0 = -1%
+        self.threshold = threshold
 
     def check(self, funding_rate: float) -> Tuple[bool, dict]:
+        # Binance API returns rate as decimal (e.g. -0.00392175 = -0.392175%)
+        # Convert to percentage for consistent comparison with user-set threshold
+        rate_pct = funding_rate * 100
         info = {
             "funding_rate": funding_rate,
+            "funding_rate_pct": rate_pct,
             "threshold": self.threshold,
-            "meets_threshold": funding_rate < self.threshold
+            "meets_threshold": rate_pct < self.threshold
         }
-        return funding_rate < self.threshold, info
+        return rate_pct < self.threshold, info

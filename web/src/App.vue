@@ -1,17 +1,65 @@
 <template>
   <div class="app">
-    <header>
-      <h1>🚀 Binance Monitor</h1>
-      <nav>
-        <button @click="view = 'dashboard'" :class="{ active: view === 'dashboard' }">Dashboard</button>
-        <button @click="view = 'settings'" :class="{ active: view === 'settings' }">Settings</button>
-        <button @click="view = 'history'" :class="{ active: view === 'history' }">History</button>
-      </nav>
+    <!-- Header -->
+    <header class="header">
+      <div class="header-inner">
+        <div class="logo">
+          <div class="logo-icon">
+            <!-- Chart icon -->
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </div>
+          <span>Binance 市場監控</span>
+          <div class="status-dot"></div>
+        </div>
+        <nav class="nav">
+          <button
+            class="nav-btn"
+            :class="{ active: view === 'dashboard' }"
+            @click="view = 'dashboard'"
+          >
+            監控面板
+          </button>
+          <button
+            class="nav-btn"
+            :class="{ active: view === 'settings' }"
+            @click="view = 'settings'"
+          >
+            設定
+          </button>
+          <button
+            class="nav-btn"
+            :class="{ active: view === 'history' }"
+            @click="view = 'history'"
+          >
+            歷史記錄
+          </button>
+        </nav>
+      </div>
     </header>
-    <main>
-      <Dashboard v-if="view === 'dashboard'" :state="state" @stop="stopTrack" />
-      <Settings v-if="view === 'settings'" :settings="state.settings" @update="loadState" />
-      <History v-if="view === 'history'" :history="state.alert_history" />
+
+    <!-- Main -->
+    <main class="main">
+      <Transition name="fade" mode="out-in">
+        <Dashboard
+          v-if="view === 'dashboard'"
+          :state="state"
+          :loading="loading"
+          @stop="stopTrack"
+          @refresh="loadState"
+          @sse-update="onSseUpdate"
+        />
+        <Settings
+          v-else-if="view === 'settings'"
+          :settings="state.settings"
+          @update="loadState"
+        />
+        <History
+          v-else-if="view === 'history'"
+          :history="state.alert_history"
+        />
+      </Transition>
     </main>
   </div>
 </template>
@@ -23,27 +71,33 @@ import Settings from './components/Settings.vue'
 import History from './components/History.vue'
 
 const view = ref('dashboard')
-const state = ref({ tracked_pairs: {}, settings: {}, alert_history: [] })
+const loading = ref(false)
+const state = ref({
+  tracked_pairs: {},
+  settings: {},
+  alert_history: []
+})
 
 async function loadState() {
-  const res = await fetch('/api/state')
-  state.value = await res.json()
+  loading.value = true
+  try {
+    const res = await fetch('/api/state')
+    state.value = await res.json()
+  } catch (e) {
+    console.error('Failed to load state:', e)
+  } finally {
+    loading.value = false
+  }
 }
 
 function stopTrack(symbol) {
-  fetch(`/api/track/${symbol}/stop`, { method: 'POST' }).then(loadState)
+  fetch(`/api/track/${symbol}/stop`, { method: 'POST' })
+    .then(() => loadState())
+}
+
+function onSseUpdate(trackedPairs) {
+  state.value.tracked_pairs = trackedPairs
 }
 
 onMounted(loadState)
-setInterval(loadState, 30000)
 </script>
-
-<style>
-body { font-family: sans-serif; margin: 0; padding: 0; background: #0f0f1a; color: #fff; }
-header { background: #1a1a2e; padding: 1rem; display: flex; align-items: center; gap: 2rem; }
-header h1 { margin: 0; font-size: 1.2rem; }
-nav { display: flex; gap: 0.5rem; }
-nav button { background: transparent; border: 1px solid #333; color: #888; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
-nav button.active, nav button:hover { background: #2a2a4a; color: #fff; border-color: #5a5a8a; }
-main { padding: 1rem; }
-</style>

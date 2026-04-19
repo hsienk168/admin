@@ -21,10 +21,17 @@ class StateManager:
             "monitored_at": None,
             "tracked_pairs": {},
             "settings": {
-                "volatility_threshold_pct": 5,
-                "volatility_std_multiplier": 2,
-                "funding_rate_threshold": -0.01,
-                "track_interval_minutes": 30
+                "volatility": {
+                    "enabled": True,
+                    "threshold_pct": 5,
+                    "std_multiplier": 2,
+                    "track_interval_minutes": 30
+                },
+                "funding_rate": {
+                    "enabled": True,
+                    "threshold": -1.0,
+                    "track_interval_minutes": 30
+                }
             },
             "alert_history": []
         }

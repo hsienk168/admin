@@ -29,7 +29,7 @@ class TelegramNotifier:
         text = (
             f"💸 **資金費率警報**\n\n"
             f"幣種: {symbol}\n"
-            f"資金費率: {funding_rate:.4f}%\n"
+            f"資金費率: {funding_rate * 100:.4f}%\n"
             f"原因: 負資金費率超限"
         )
         return self._send(text)

@@ -20,6 +20,7 @@ class BinanceMonitor:
         self.price_5min_ago: dict = {}       # symbol -> price 5 min ago
         self.funding_rate_cache: dict = funding_rate_cache or {}
         self._last_5min_check: dict = {}     # symbol -> timestamp
+        self._last_reload_time: float = 0    # timestamp for reload throttle
 
     def _process_ticker(self, msg: dict):
         symbol = msg["s"]
@@ -48,7 +49,14 @@ class BinanceMonitor:
 
         # Check tracking
         if symbol in self.state.data["tracked_pairs"] and self.trigger:
-            self.trigger.check_tracking(symbol, current_price)
+            tracked = self.state.data["tracked_pairs"].get(symbol)
+            if tracked:
+                reason = tracked.get("trigger_reason")
+                if reason == "volatility":
+                    interval = self.state.data["settings"]["volatility"]["track_interval_minutes"]
+                else:
+                    interval = self.state.data["settings"]["funding_rate"]["track_interval_minutes"]
+                self.trigger.check_tracking(symbol, current_price, interval)
 
     def _check_tracking(self, symbol: str):
         """Check if a tracked symbol needs a tracking report."""
@@ -58,7 +66,14 @@ class BinanceMonitor:
         if current_price is None:
             return
         if self.trigger:
-            self.trigger.check_tracking(symbol, current_price)
+            tracked = self.state.data["tracked_pairs"].get(symbol)
+            if tracked:
+                reason = tracked.get("trigger_reason")
+                if reason == "volatility":
+                    interval = self.state.data["settings"]["volatility"]["track_interval_minutes"]
+                else:
+                    interval = self.state.data["settings"]["funding_rate"]["track_interval_minutes"]
+                self.trigger.check_tracking(symbol, current_price, interval)
 
     async def _fetch_funding_rates(self):
         """Background task: fetch funding rates from Binance API."""
@@ -73,7 +88,17 @@ class BinanceMonitor:
                         symbol = item["symbol"]
                         funding_rate = float(item.get("lastFundingRate", 0))
                         self.funding_rate_cache[symbol] = funding_rate
-                        if self.trigger and funding_rate < self.state.data["settings"]["funding_rate_threshold"]:
+
+                        # Throttle reload to once per minute
+                        now_ts = asyncio.get_event_loop().time()
+                        if now_ts - self._last_reload_time >= 60:
+                            self.state.data = self.state._load()
+                            if self.trigger:
+                                self.trigger.reload()
+                            self._last_reload_time = now_ts
+
+                        fs = self.state.data["settings"]["funding_rate"]
+                        if self.trigger and funding_rate < fs["threshold"] / 100:
                             self.trigger.process_funding_rate(symbol, funding_rate)
             except Exception:
                 pass

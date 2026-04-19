@@ -24,16 +24,18 @@ def test_update_tracked_pair():
     finally:
         os.unlink(tmp)
 
-def test_save_settings():
+def test_update_volatility_settings():
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         f.write('{"tracked_pairs": {}, "settings": {}, "alert_history": []}')
         tmp = f.name
     try:
         sm = StateManager(tmp)
-        sm.update_settings({"volatility_threshold_pct": 3})
+        sm.data["settings"]["volatility"] = {"enabled": True, "threshold_pct": 5, "std_multiplier": 2, "track_interval_minutes": 30}
+        sm.data["settings"]["funding_rate"] = {"enabled": True, "threshold": -1.0, "track_interval_minutes": 30}
+        sm.data["settings"]["volatility"]["threshold_pct"] = 3
         sm.save()
         content = json.load(open(tmp))
-        assert content["settings"]["volatility_threshold_pct"] == 3
+        assert content["settings"]["volatility"]["threshold_pct"] == 3
     finally:
         os.unlink(tmp)
 

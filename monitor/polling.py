@@ -11,6 +11,7 @@ import logging
 import sys
 import requests
 from datetime import datetime, timezone, timedelta
+from collections import deque
 from typing import Optional
 from .state import StateManager
 from .trigger import TriggerEngine
@@ -22,6 +23,9 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("binance-monitor")
+
+# API base URL for broadcasting state changes to SSE clients
+_API_BASE = "http://localhost:8765"
 
 
 class BinanceMarketMonitor:
@@ -40,6 +44,7 @@ class BinanceMarketMonitor:
         self.trigger = trigger
         self.funding_rate_cache: dict = funding_rate_cache or {}
         self._prev_prices: dict = {}   # symbol -> previous price (from last poll)
+        self._price_history: dict = {}  # symbol -> deque of (timestamp, price), kept for 5min
         self._poll_count = 0
 
     @property
@@ -47,12 +52,28 @@ class BinanceMarketMonitor:
         """Delegate to trigger's notifier for backward compatibility."""
         return self.trigger.notifier
 
+    def _broadcast_state(self):
+        """Fire-and-forget SSE broadcast after state changes."""
+        try:
+            import threading
+            def _post():
+                requests.post(
+                    f"{_API_BASE}/api/events/broadcast",
+                    json={"tracked_pairs": self.state.data.get("tracked_pairs", {})},
+                    timeout=3,
+                )
+            t = threading.Thread(target=_post, daemon=True)
+            t.start()
+        except Exception as e:
+            logger.warning(f"SSE broadcast failed: {e}")
+
     async def start(self):
         """Main polling loop."""
         logger.info("Binance Market Monitor started (REST polling mode)")
         # Mark as monitored
         self.state.data["monitored_at"] = datetime.now(timezone.utc).isoformat()
         self.state.save()
+        self._broadcast_state()
         while True:
             try:
                 self._poll_count += 1
@@ -63,6 +84,11 @@ class BinanceMarketMonitor:
 
     async def _poll_once(self):
         """Fetch and process all market data once."""
+        # Reload settings from disk every minute so API updates take effect
+        if self._poll_count % 6 == 0:
+            self.state.data = self.state._load()
+            if self.trigger:
+                self.trigger.reload()
         tickers = await self._fetch_spot_tickers()
         if tickers is not None:
             self._process_tickers(tickers)
@@ -80,32 +106,43 @@ class BinanceMarketMonitor:
 
     async def _fetch_funding_rates(self):
         """Fetch funding rates from futures API."""
+        vs = self.state.data["settings"]["volatility"]
+        fs = self.state.data["settings"]["funding_rate"]
         try:
             resp = requests.get(self.FUTURES_PREMIUM_INDEX_URL, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 for item in data:
                     symbol = item["symbol"]
-                    # lastFundingRate is already in decimal form (e.g., -0.0001 = -0.01%)
-                    # Compare directly with threshold (e.g., -0.01 = -1%)
                     funding_rate = float(item.get("lastFundingRate", 0))
                     self.funding_rate_cache[symbol] = funding_rate
-                    if self.trigger and funding_rate < self.state.data["settings"]["funding_rate_threshold"]:
-                        self.trigger.process_funding_rate(symbol, funding_rate)
+                    if self.trigger:
+                        tracked = self.state.data["tracked_pairs"].get(symbol)
+                        if tracked and tracked.get("trigger_reason") == "funding_rate":
+                            mark_price = float(item.get("markPrice", 0))
+                            if mark_price > 0:
+                                self.trigger.check_tracking(
+                                    symbol, mark_price, fs["track_interval_minutes"]
+                                )
+                        else:
+                            self.trigger.process_funding_rate(symbol, funding_rate)
         except Exception as e:
             logger.warning(f"Failed to fetch funding rates: {e}")
 
     def _process_tickers(self, tickers: list):
         """
-        Process 24hr ticker data.
-        Use Binance's priceChangePercent (24h change) as the volatility metric.
-        Trigger if 24h change >= volatility_threshold_pct.
+        Process ticker data.
+        Use 5-minute price change % as the volatility metric.
+        Keep rolling price history per symbol and compute change from ~5min ago.
         """
         if self.trigger is None:
             return
 
-        settings = self.state.data["settings"]
-        vol_threshold = settings["volatility_threshold_pct"]
+        vs = self.state.data["settings"]["volatility"]
+        fs = self.state.data["settings"]["funding_rate"]
+        vol_threshold = vs["threshold_pct"]
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=5)
 
         for ticker in tickers:
             try:
@@ -119,20 +156,46 @@ class BinanceMarketMonitor:
                 if not symbol.endswith("USDT"):
                     continue
 
-                # Use 24h price change % as volatility metric
-                price_change_pct = float(ticker.get("priceChangePercent", 0))
+                # Update rolling price history (keep last 5 min)
+                if symbol not in self._price_history:
+                    self._price_history[symbol] = deque(maxlen=60)  # ~10s intervals, 60 = 10min buffer
+                self._price_history[symbol].append((now, last_price))
 
-                # Check volatility trigger: 24h change >= threshold
-                # Bypass VolatilityAnalyzer since we already have 24h change %
-                if abs(price_change_pct) >= vol_threshold:
+                # Prune old entries
+                while self._price_history[symbol] and self._price_history[symbol][0][0] < cutoff:
+                    self._price_history[symbol].popleft()
+
+                # Calculate 5-minute change %
+                history = self._price_history[symbol]
+                price_5min_ago = None
+                for ts, price in history:
+                    if ts <= cutoff:
+                        price_5min_ago = price
+                        break
+
+                if price_5min_ago is None or len(history) < 2:
+                    # Not enough history yet, skip
+                    if symbol in self.state.data["tracked_pairs"]:
+                        tracked = self.state.data["tracked_pairs"][symbol]
+                        interval = (
+                            vs["track_interval_minutes"]
+                            if tracked.get("trigger_reason") == "volatility"
+                            else fs["track_interval_minutes"]
+                        )
+                        self.trigger.check_tracking(symbol, last_price, interval)
+                    continue
+
+                change_pct_5m = ((last_price - price_5min_ago) / price_5min_ago) * 100
+
+                # Check volatility trigger: 5min change >= threshold
+                if abs(change_pct_5m) >= vol_threshold:
                     if symbol not in self.state.data["tracked_pairs"]:
-                        track_interval = self.state.data["settings"]["track_interval_minutes"]
-                        next_report = datetime.now(timezone.utc) + timedelta(minutes=track_interval)
+                        next_report = now + timedelta(minutes=vs["track_interval_minutes"])
                         self.state.update_tracked_pair(symbol, {
-                            "triggered_at": datetime.now(timezone.utc).isoformat(),
+                            "triggered_at": now.isoformat(),
                             "trigger_reason": "volatility",
                             "trigger_price": last_price,
-                            "volatility_pct": round(price_change_pct, 2),
+                            "volatility_pct": round(change_pct_5m, 2),
                             "std_devs": None,
                             "funding_rate": None,
                             "next_report_at": next_report.isoformat(),
@@ -142,17 +205,22 @@ class BinanceMarketMonitor:
                         self.notifier.send_volatility_alert(
                             symbol=symbol,
                             price=last_price,
-                            change_pct=round(price_change_pct, 2),
+                            change_pct=round(change_pct_5m, 2),
                             std_devs=0
                         )
-                        logger.info(f"Volatility triggered: {symbol} {price_change_pct:+.2f}%")
-                # Check tracked pairs for 30-min reports
+                        logger.info(f"Volatility triggered: {symbol} {change_pct_5m:+.2f}% (5m)")
+                # Check tracked pairs for interval reports
                 if symbol in self.state.data["tracked_pairs"]:
-                    self.trigger.check_tracking(symbol, last_price)
+                    tracked = self.state.data["tracked_pairs"][symbol]
+                    interval = (
+                        vs["track_interval_minutes"]
+                        if tracked.get("trigger_reason") == "volatility"
+                        else fs["track_interval_minutes"]
+                    )
+                    self.trigger.check_tracking(symbol, last_price, interval)
 
             except (KeyError, ValueError, TypeError):
                 continue
 
         if self._poll_count % 6 == 0:  # Log every minute (6 x 10s)
-            now = datetime.now(timezone.utc)
             logger.info(f"[{now.isoformat()}] Polled {len(tickers)} symbols, tracked: {len(self.state.data['tracked_pairs'])}")
